@@ -1,0 +1,55 @@
+import RPi.GPIO as GPIO
+import time
+
+SERVO_PIN = 18   # must be a hardware PWM pin on Pi 4
+
+# Duty cycle values for your servo (adjust if needed)
+CENTER = 7.5
+LEFT   = 10.0
+RIGHT  = 5.0
+
+_pwm = None
+
+
+def setup():
+    global _pwm
+    GPIO.setup(SERVO_PIN, GPIO.OUT)
+    _pwm = GPIO.PWM(SERVO_PIN, 50)   # 50 Hz for standard servos
+    _pwm.start(CENTER)
+    time.sleep(0.5)
+
+
+def look_center():
+    _pwm.ChangeDutyCycle(CENTER)
+    time.sleep(0.3)
+
+
+def look_left():
+    _pwm.ChangeDutyCycle(LEFT)
+    time.sleep(0.4)
+
+
+def look_right():
+    _pwm.ChangeDutyCycle(RIGHT)
+    time.sleep(0.4)
+
+
+def scan():
+    """Scan left and right, return (left_clear, right_clear) booleans.
+    Import ultrasonic here to avoid circular imports."""
+    import ultrasonic
+
+    look_left()
+    left_dist = ultrasonic.get_distance_cm()
+
+    look_right()
+    right_dist = ultrasonic.get_distance_cm()
+
+    look_center()
+
+    return (left_dist > ultrasonic.OBSTACLE_DISTANCE_CM,
+            right_dist > ultrasonic.OBSTACLE_DISTANCE_CM)
+
+
+def cleanup():
+    _pwm.stop()
