@@ -1,0 +1,184 @@
+"""
+Line-following robot with obstacle avoidance
+Raspberry Pi 4 | Webcam | HC-SR04 | L298N | Servo
+"""
+
+import time
+import RPi.GPIO as GPIO
+import motors
+import ultrasonic
+import servo
+import camera_vision
+
+# -----------------------------------------------------------------
+# States
+# ------------------------------------------------------------------
+STATE_FOLLOW_LINE  = "follow_line"
+STATE_AVOID        = "avoid_obstacle"
+STATE_RETURN       = "return_to_line"
+STATE_STOP         = "stop"
+
+# ------------------------------------------------------------------
+# Tuning
+# ------------------------------------------------------------------
+KP = 0.3          # proportional gain for line steering (adjust for your line width)
+LOOP_HZ = 20      # main loop frequency
+AVOID_TURN_TIME  = 0.5   # seconds to turn when avoiding
+AVOID_DRIVE_TIME = 0.6   # seconds to drive past obstacle
+RETURN_TIMEOUT   = 3.0   # max seconds to search for line before stopping
+
+
+def init():
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
+    motors.setup()
+    ultrasonic.setup()
+    servo.setup()
+    camera_vision.setup()
+    print("[ROBOT] All modules initialised")
+
+
+def follow_line_step():
+    """PD controller — steer based on camera line error.
+    Returns True if still on line, False if line lost."""
+    error = camera_vision.get_line_error()
+
+    if error is None:
+        motors.stop()
+        return False   # line lost
+
+    if abs(error) < camera_vision.DEADZONE:
+        motors.forward()
+    elif error < 0:
+        # line is to the LEFT → steer left
+        motors.steer_left()
+    else:
+        # line is to the RIGHT → steer right
+        motors.steer_right()
+
+    return True
+
+
+def decide_avoidance_direction():
+    """Scan with servo and decide which way to go.
+    Returns 'left' or 'right'."""
+    left_clear, right_clear = servo.scan()
+
+    # Check camera for additional side info
+    _, cam_side = camera_vision.detect_camera_obstacle()
+
+    # Core decision logic from spec:
+    # Obstacle front + right → go LEFT
+    # Obstacle front + left  → go RIGHT
+    if cam_side == 'right' or not right_clear:
+        return 'left'
+    elif cam_side == 'left' or not left_clear:
+        return 'right'
+    else:
+        # Both sides clear — default to left
+        return 'left'
+
+
+def avoid_obstacle(direction):
+    """Perform a simple square-wave avoidance manoeuvre."""
+    print(f"[AVOID] Turning {direction}")
+    motors.stop()
+    time.sleep(0.1)
+
+    # Step 1: turn away from obstacle
+    if direction == 'left':
+        motors.turn_left()
+    else:
+        motors.turn_right()
+    time.sleep(AVOID_TURN_TIME)
+
+    # Step 2: drive past obstacle
+    motors.forward()
+    time.sleep(AVOID_DRIVE_TIME)
+
+    motors.stop()
+
+
+def return_to_line():
+    """Drive forward slowly, scanning for the line. Returns True when found."""
+    print("[RETURN] Searching for line...")
+    start = time.time()
+
+    while time.time() - start < RETURN_TIMEOUT:
+        motors.forward(speed=40)
+        error = camera_vision.get_line_error()
+        if error is not None:
+            print("[RETURN] Line found!")
+            motors.stop()
+            return True
+        time.sleep(1 / LOOP_HZ)
+
+    motors.stop()
+    print("[RETURN] Line not found within timeout")
+    return False
+
+
+def main():
+    init()
+    state = STATE_FOLLOW_LINE
+    avoid_dir = 'left'
+
+    print("[ROBOT] Starting — press Ctrl+C to stop")
+
+    try:
+        while True:
+            loop_start = time.time()
+
+            # ---- FOLLOW LINE ----
+            if state == STATE_FOLLOW_LINE:
+                on_line = follow_line_step()
+
+                # Check for obstacles
+                if ultrasonic.obstacle_detected():
+                    print("[STATE] Obstacle detected → AVOID")
+                    motors.stop()
+                    avoid_dir = decide_avoidance_direction()
+                    state = STATE_AVOID
+
+                elif not on_line:
+                    # Line temporarily lost — slow and search
+                    motors.forward(speed=30)
+
+            # ---- AVOID OBSTACLE ----
+            elif state == STATE_AVOID:
+                avoid_obstacle(avoid_dir)
+                state = STATE_RETURN
+
+            # ---- RETURN TO LINE ----
+            elif state == STATE_RETURN:
+                found = return_to_line()
+                if found:
+                    state = STATE_FOLLOW_LINE
+                else:
+                    state = STATE_STOP
+
+            # ---- STOP ----
+            elif state == STATE_STOP:
+                motors.stop()
+                print("[ROBOT] Halted. Check surroundings.")
+                break
+
+            # Maintain loop frequency
+            elapsed = time.time() - loop_start
+            sleep_time = max(0, 1 / LOOP_HZ - elapsed)
+            time.sleep(sleep_time)
+
+    except KeyboardInterrupt:
+        print("\n[ROBOT] Stopped by user")
+
+    finally:
+        motors.cleanup()
+        servo.cleanup()
+        camera_vision.cleanup()
+        GPIO.cleanup()
+        print("[ROBOT] Cleaned up. Goodbye.")
+
+
+if __name__ == "__main__":
+    main()
+
