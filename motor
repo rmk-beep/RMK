@@ -1,0 +1,73 @@
+import RPi.GPIO as GPIO
+
+# --- Pin configuration (BCM numbering) ---
+# Left motors
+ENA = 25   # PWM speed control - left
+IN1 = 23   # Direction pin 1 - left
+IN2 = 24   # Direction pin 2 - left
+
+# Right motors
+ENB = 12   # PWM speed control - right
+IN3 = 17   # Direction pin 1 - right
+IN4 = 27   # Direction pin 2 - right
+
+BASE_SPEED = 60   # 0-100 duty cycle for normal driving
+TURN_SPEED = 50   # speed during turns
+
+
+def setup():
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
+    for pin in [ENA, IN1, IN2, ENB, IN3, IN4]:
+        GPIO.setup(pin, GPIO.OUT)
+
+    global pwm_left, pwm_right
+    pwm_left = GPIO.PWM(ENA, 1000)
+    pwm_right = GPIO.PWM(ENB, 1000)
+    pwm_left.start(0)
+    pwm_right.start(0)
+
+
+def _set(left_speed, right_speed, left_fwd=True, right_fwd=True):
+    GPIO.output(IN1, GPIO.HIGH if left_fwd else GPIO.LOW)
+    GPIO.output(IN2, GPIO.LOW  if left_fwd else GPIO.HIGH)
+    GPIO.output(IN3, GPIO.HIGH if right_fwd else GPIO.LOW)
+    GPIO.output(IN4, GPIO.LOW  if right_fwd else GPIO.HIGH)
+    pwm_left.ChangeDutyCycle(left_speed)
+    pwm_right.ChangeDutyCycle(right_speed)
+
+
+def forward(speed=BASE_SPEED):
+    _set(speed, speed)
+
+
+def turn_left(speed=TURN_SPEED):
+    """Pivot left: right wheels forward, left wheels reverse."""
+    _set(speed, speed, left_fwd=False, right_fwd=True)
+
+
+def turn_right(speed=TURN_SPEED):
+    """Pivot right: left wheels forward, right wheels reverse."""
+    _set(speed, speed, left_fwd=True, right_fwd=False)
+
+
+def steer_left(speed=BASE_SPEED):
+    """Gentle left curve while still moving forward."""
+    _set(speed * 0.3, speed)
+
+
+def steer_right(speed=BASE_SPEED):
+    """Gentle right curve while still moving forward."""
+    _set(speed, speed * 0.3)
+
+
+def stop():
+    pwm_left.ChangeDutyCycle(0)
+    pwm_right.ChangeDutyCycle(0)
+
+
+def cleanup():
+    stop()
+    pwm_left.stop()
+    pwm_right.stop()
+    GPIO.cleanup()
