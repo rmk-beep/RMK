@@ -1,0 +1,105 @@
+import cv2
+import numpy as np
+
+# Camera index (0 = first USB webcam)
+CAM_INDEX = 0
+
+# Frame dimensions
+WIDTH  = 320
+HEIGHT = 240
+
+# --- Line detection config ---
+# Row in the image to scan for the line (bottom portion)
+LINE_ROW = int(HEIGHT * 0.75)
+
+# Threshold: anything darker than this (0-255) is treated as the line
+LINE_THRESHOLD = 80
+
+# Error dead-zone: centre offset within ±DEADZONE is treated as "on line"
+DEADZONE = 20
+
+# --- Obstacle detection config ---
+# Minimum contour area to count as an obstacle in the camera frame
+OBSTACLE_MIN_AREA = 3000
+
+# Row above which we check for obstacles in the frame
+OBSTACLE_ROW = int(HEIGHT * 0.55)
+
+_cap = None
+
+
+def setup():
+    global _cap
+    _cap = cv2.VideoCapture(CAM_INDEX)
+    _cap.set(cv2.CAP_PROP_FRAME_WIDTH,  WIDTH)
+    _cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
+
+
+def _get_frame():
+    ret, frame = _cap.read()
+    if not ret:
+        return None
+    return frame
+
+
+def get_line_error():
+    """Return signed pixel error from centre.
+    Negative = line is to the LEFT, positive = line is to the RIGHT.
+    Returns None if line not found."""
+    frame = _get_frame()
+    if frame is None:
+        return None
+
+    gray   = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, binary = cv2.threshold(blurred, LINE_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
+
+    row = binary[LINE_ROW, :]
+    indices = np.where(row > 0)[0]
+
+    if len(indices) == 0:
+        return None
+
+    centre_of_line = int(np.mean(indices))
+    error = centre_of_line - (WIDTH // 2)
+    return error
+
+
+def detect_camera_obstacle():
+    """Returns (obstacle_present, side).
+    side = 'left' | 'right' | 'centre' | None."""
+    frame = _get_frame()
+    if frame is None:
+        return False, None
+
+    # Simple colour-agnostic obstacle: look for large foreground blobs
+    # in the upper portion of the frame using edge detection
+    roi = frame[:OBSTACLE_ROW, :]
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    large = [c for c in contours if cv2.contourArea(c) > OBSTACLE_MIN_AREA]
+    if not large:
+        return False, None
+
+    # Find the largest contour and check which side it falls on
+    biggest = max(large, key=cv2.contourArea)
+    M = cv2.moments(biggest)
+    if M['m00'] == 0:
+        return True, 'centre'
+
+    cx = int(M['m10'] / M['m00'])
+    if cx < WIDTH // 3:
+        side = 'left'
+    elif cx > (2 * WIDTH) // 3:
+        side = 'right'
+    else:
+        side = 'centre'
+
+    return True, side
+
+
+def cleanup():
+    if _cap:
+        _cap.release()
